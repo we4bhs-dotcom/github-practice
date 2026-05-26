@@ -3,14 +3,19 @@ from tkinter import ttk, scrolledtext, messagebox
 import json
 from validator import Validator
 from database import NarrativeDB
+import sys
+import os
+import time
+import subprocess
+import requests
 
 db = NarrativeDB()
-validator = Validator()
+validator = Validator(db)
+
 
 root = tk.Tk()
 root.title("서사 정합성 검증기")
 root.geometry("900x700")
-root.option_add("*Font", "NanumGothic 10")
 
 # 캐릭터 추가
 frame_top = tk.Frame(root)
