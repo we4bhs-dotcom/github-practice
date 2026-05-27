@@ -1,4 +1,5 @@
 import json
+import re  # 💡 정규식 임포트를 파일 최상단으로 이동
 from database import NarrativeDB
 from llm import OllamaLLM
 
@@ -61,17 +62,65 @@ class Validator:
 
         return results
 
-    def classify(self, scene: str, character_names: list) -> list:
-        # [수정] Ollama가 출력한 JSON 스트링을 파이썬 객체(list/dict)로 안전하게 변환하여 리턴
+    # 💡 들여쓰기를 맞춰서 Validator 클래스의 정식 메서드로 안착시킴
+    def classify(self, scene: str, character_names: list) -> str:  # ⭐️ 리턴 타입을 str로 변경 (main.py 연동용)
         characters = ", ".join(character_names)
-        prompt = f"""(기존 프롬프트 생략)... 각 문장마다 아래 JSON 형식으로만 답해줘. 다른 말은 하지 마.
-        [ {{"문장": "내용", "분류": "W 또는 이름_P/B/K/D"}} ] \n장면:\n{scene}"""
         
+        # 1. 파이썬이 정규식으로 문장을 완벽하게 분리 (원문 100% 보존)
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', scene) if s.strip()]
+        
+        # 2. 라마에게 줄 프롬프트에 문장 번호를 매겨서 제공 (맥락 유지를 위해 통째로 줌)
+        numbered_sentences = ""
+        for idx, sent in enumerate(sentences):
+            numbered_sentences += f"[{idx}] {sent}\n"
+            
+        prompt = f"""너는 소설 문장 분류기야. 제공된 '장면'의 전체 맥락과 대명사(그, 그의 등)가 어떤 캐릭터를 가리키는지 파악하여, 각 문장 번호에 맞는 분류 태그만 JSON 배열로 반환해.
+
+분류 기준:
+- W: 세계관 설정, 규칙, 지리, 역사, 혹은 캐릭터의 신체적 특징/흉터/외양/소품 설정
+- 캐릭터이름_P: 캐릭터의 성격, 기질, 행동 방식
+- 캐릭터이름_B: 캐릭터의 신념, 가치관
+- 캐릭터이름_K: 캐릭터가 아는 지식, 정보
+- 캐릭터이름_D: 캐릭터의 목표, 욕망
+
+등장 캐릭터: {characters}
+
+[중요] '그', '그의' 같은 대명사는 전체 맥락을 보고 등장 캐릭터 중 누구를 뜻하는지 파악해서 분류해라.
+
+장면 (번호 규칙을 절대 훼손하지 마):
+{numbered_sentences}
+
+출력 형식 (오직 이 JSON 형식만 반환하고 다른 말은 절대 하지 마):
+[
+  {{"id": 0, "분류": "W 또는 캐릭터이름_P/B/K/D"}},
+  ...
+]"""
+
         raw_result = self.llm.generate(prompt)
+        
+        final_data = []
         try:
-            # 마크다운 껍데기(```json ... ```)가 붙어 나올 경우를 대비한 가벼운 정제 필요할 수 있음
-            return json.loads(raw_result)
-        except json.JSONDecodeError:
-            # 파싱 실패 시 원문이라도 추적할 수 있도록 예외 처리
-            print("[Warning] JSON 파싱 실패. 원문 스트링을 리턴합니다.")
-            return raw_result
+            # 안전한 JSON 추출
+            clean_raw = raw_result.strip()
+            start_idx = clean_raw.find("[")
+            end_idx = clean_raw.rfind("]") + 1
+            if start_idx != -1 and end_idx != 0:
+                clean_raw = clean_raw[start_idx:end_idx]
+                
+            llm_output = json.loads(clean_raw)
+            
+            # 3. ⭐️ 핵심: 라마가 준 '분류'와 파이썬이 보존한 '원본 문장'을 강제로 결합
+            for item in llm_output:
+                sent_id = item.get("id")
+                if sent_id is not None and sent_id < len(sentences):
+                    final_data.append({
+                        "문장": sentences[sent_id],  # 형 원문 그대로 주입
+                        "분류": item.get("분류", "W")
+                    })
+            
+        except Exception as e:
+            print(f"[🚨 라마 분류 실패 로그]: {raw_result}")
+            final_data = [{"문장": sent, "분류": "W"} for sent in sentences]
+
+        # 4. ⭐️ main.py의 json.loads(raw)가 정상 작동하도록 JSON 문자열로 인코딩해서 리턴
+        return json.dumps(final_data, ensure_ascii=False)

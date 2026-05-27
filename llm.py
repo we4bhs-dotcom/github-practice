@@ -4,14 +4,14 @@ import json
 class OllamaLLM:
     def __init__(self, model_name: str = "llama3.2"):
         self.model_name = model_name
-        # 💡 기존 "http://localhost:11434"에서 WSL->윈도우 로컬 직공 주소로 변경
-        self.base_url = "http://gateway.docker.internal:11434"
-
+        self.base_url = "http://localhost:11434"
+        
     def generate(self, prompt: str) -> str:
         data = {
             "model": self.model_name,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "format": "json"  # 💡 Ollama에게 오직 JSON 형식으로만 출력하라고 강제하는 옵션이야!
         }
         try:
             response = requests.post(
