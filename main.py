@@ -29,19 +29,56 @@ def add_character():
     name = entry_char.get()
     if name:
         db.add_character(name)
-        combo_char["values"] = list(db.characters.keys())
+        update_char_checkboxes()
         messagebox.showinfo("완료", f"{name} 추가됨")
 
 tk.Button(frame_top, text="캐릭터 추가", command=add_character).pack(side=tk.LEFT)
 
-# 캐릭터 선택
 frame_mid = tk.Frame(root)
 frame_mid.pack(pady=10)
 
-tk.Label(frame_mid, text="캐릭터 선택:").pack(side=tk.LEFT)
-combo_char = ttk.Combobox(frame_mid)
-combo_char.pack(side=tk.LEFT, padx=5)
+tk.Label(frame_mid, text="등장 캐릭터:").pack(side=tk.LEFT)
 
+char_vars = {}  # 캐릭터별 체크박스 변수 저장
+char_alias_entries = {}  # 캐릭터별 호칭 입력창
+
+def update_char_checkboxes():
+    for widget in frame_mid.winfo_children():
+        if not isinstance(widget, tk.Label):
+            widget.destroy()
+    
+    char_alias_entries.clear()
+    
+    for name in db.characters.keys():
+        if name not in char_vars:
+            char_vars[name] = tk.BooleanVar()
+        
+        row = tk.Frame(frame_mid)
+        row.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Checkbutton(row, text=name, variable=char_vars[name]).pack(side=tk.LEFT)
+        
+        alias_entry = tk.Entry(row, width=15)
+        alias_entry.insert(0, ", ".join(db.get_aliases(name)))
+        alias_entry.pack(side=tk.LEFT, padx=3)
+        
+        char_alias_entries[name] = alias_entry
+
+def get_selected_characters():
+    # 선택된 캐릭터 목록 반환하면서 호칭도 업데이트
+    selected = []
+    for name, var in char_vars.items():
+        if var.get():
+            selected.append(name)
+            # 호칭 입력창에서 최신 호칭 가져와서 업데이트
+            if name in char_alias_entries:
+                raw = char_alias_entries[name].get()
+                aliases = [a.strip() for a in raw.split(",") if a.strip()]
+                db.update_aliases(name, aliases)
+    return selected
+
+def get_selected_characters():
+    return [name for name, var in char_vars.items() if var.get()]
 # 장면 입력
 tk.Label(root, text="장면 입력:").pack()
 text_scene = scrolledtext.ScrolledText(root, height=6)
@@ -67,25 +104,44 @@ classify_rows = []  # 분류 결과 저장
 
 def show_classify():
     scene = text_scene.get("1.0", tk.END).strip()
-    character = combo_char.get()
-    if not scene or not character:
+    characters = get_selected_characters()
+    if not scene or not characters:
         messagebox.showwarning("경고", "캐릭터와 장면을 입력해주세요")
         return
 
-    # 기존 rows 초기화
     for widget in scroll_frame.winfo_children():
         widget.destroy()
     classify_rows.clear()
 
-    # LLM 분류
-    characters = list(db.characters.keys())
-    raw = validator.classify(scene, characters)
+    # 캐릭터 + 호칭 정보 포함해서 분류
+    char_info = {name: db.get_aliases(name) for name in characters}
+    raw = validator.classify(scene, char_info)
 
     try:
         data = json.loads(raw)
     except:
         messagebox.showerror("오류", "분류 결과 파싱 실패")
         return
+
+    for i, item in enumerate(data):
+        row_frame = tk.Frame(scroll_frame)
+        row_frame.pack(fill=tk.X, pady=2)
+
+        tk.Label(row_frame, text=item["문장"], wraplength=400, anchor="w").pack(side=tk.LEFT, padx=5)
+
+        raw_class = item["분류"]
+        if "_" in raw_class:
+            char_val, attr_val = raw_class.rsplit("_", 1)
+        else:
+            char_val, attr_val = "", raw_class
+
+        combo_attr = ttk.Combobox(row_frame, values=["W", "P", "B", "K", "D"], width=5)
+        combo_attr.set(attr_val)
+        combo_attr.pack(side=tk.LEFT, padx=5)
+
+        combo_char_row = ttk.Combobox(row_frame, values=list(db.characters.keys()), width=10)
+        combo_char_row.set(char_val)
+        combo_char_row.pack(side=tk.LEFT, padx=5)
 
     # 분류 옵션 생성
     options = ["W"]
@@ -135,7 +191,7 @@ tk.Button(root, text="자동 분류", command=show_classify).pack(pady=5)
 
 # 검증 버튼
 def validate():
-    character = combo_char.get()
+    character = get_selected_characters()
     scene = text_scene.get("1.0", tk.END).strip()
     if not character or not scene:
         messagebox.showwarning("경고", "캐릭터와 장면을 입력해주세요")
