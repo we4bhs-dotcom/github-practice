@@ -2,12 +2,14 @@ import json
 import re
 from database import NarrativeDB
 from llm import OllamaLLM
+#from llm import GeminiClient
 
 class Validator:
     # 외부(main.py)에서 이미 만들어진 db 객체를 넘겨받도록 변경
     def __init__(self, db_instance):
         self.db = db_instance
-        self.llm = OllamaLLM()
+        #self.llm =GeminiClient()
+        self.llm =OllamaLLM()
 
     def validate(self, character_name: str, scene: str) -> dict:
         results = {"status": "pass", "reason": "", "failed_at": None}

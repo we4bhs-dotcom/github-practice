@@ -12,7 +12,6 @@ import requests
 db = NarrativeDB()
 validator = Validator(db)
 
-
 root = tk.Tk()
 root.title("서사 정합성 검증기")
 root.geometry("900x700")
@@ -64,21 +63,19 @@ def update_char_checkboxes():
         
         char_alias_entries[name] = alias_entry
 
+# 💡 버그 수정: 두 개로 찢어져서 뇌절 오던 함수를 하나로 깔끔하게 합침!
 def get_selected_characters():
-    # 선택된 캐릭터 목록 반환하면서 호칭도 업데이트
     selected = []
     for name, var in char_vars.items():
         if var.get():
             selected.append(name)
-            # 호칭 입력창에서 최신 호칭 가져와서 업데이트
+            # 호칭 입력창에서 최신 호칭 가져와서 DB 동기화
             if name in char_alias_entries:
                 raw = char_alias_entries[name].get()
                 aliases = [a.strip() for a in raw.split(",") if a.strip()]
                 db.update_aliases(name, aliases)
     return selected
 
-def get_selected_characters():
-    return [name for name, var in char_vars.items() if var.get()]
 # 장면 입력
 tk.Label(root, text="장면 입력:").pack()
 text_scene = scrolledtext.ScrolledText(root, height=6)
@@ -102,6 +99,7 @@ scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 classify_rows = []  # 분류 결과 저장
 
+# 💡 버그 수정: 하단에 복사-붙여넣기로 중복 렌더링되던 지저분한 이중 루프 완벽 제거
 def show_classify():
     scene = text_scene.get("1.0", tk.END).strip()
     characters = get_selected_characters()
@@ -135,45 +133,17 @@ def show_classify():
         else:
             char_val, attr_val = "", raw_class
 
+        # 속성 드롭다운 (W, P, B, K, D)
         combo_attr = ttk.Combobox(row_frame, values=["W", "P", "B", "K", "D"], width=5)
         combo_attr.set(attr_val)
         combo_attr.pack(side=tk.LEFT, padx=5)
 
+        # 캐릭터 연동 드롭다운
         combo_char_row = ttk.Combobox(row_frame, values=list(db.characters.keys()), width=10)
         combo_char_row.set(char_val)
         combo_char_row.pack(side=tk.LEFT, padx=5)
 
-    # 분류 옵션 생성
-    options = ["W"]
-    for name in characters:
-        for attr in ["P", "B", "K", "D"]:
-            options.append(f"{name}_{attr}")
-
-    # 각 문장마다 드롭다운 생성
-    for i, item in enumerate(data):
-        row_frame = tk.Frame(scroll_frame)
-        row_frame.pack(fill=tk.X, pady=2)
-
-        tk.Label(row_frame, text=item["문장"], wraplength=400, anchor="w").pack(side=tk.LEFT, padx=5)
-
-        # 분류값 파싱 (예: "홍길동_P" → attr="P", char="홍길동")
-        raw_class = item["분류"]
-        if "_" in raw_class:
-            char_val, attr_val = raw_class.rsplit("_", 1)
-        else:
-            char_val, attr_val = "", raw_class  # W인 경우
-
-        # 속성 드롭다운
-        combo_attr = ttk.Combobox(row_frame, values=["W", "P", "B", "K", "D"], width=5)
-        combo_attr.set(attr_val)
-        combo_attr.pack(side=tk.LEFT, padx=5)
-
-        # 캐릭터 드롭다운
-        combo_char_row = ttk.Combobox(row_frame, values=list(db.characters.keys()), width=10)
-        combo_char_row.set(char_val)
-        combo_char_row.pack(side=tk.LEFT, padx=5)
-
-        # W면 캐릭터 드롭다운 비활성화
+        # W 선택 시 캐릭터창 비활성화해 주는 기믹 추가
         def on_attr_change(event, c=combo_char_row, a=combo_attr):
             if a.get() == "W":
                 c.set("")
@@ -185,28 +155,40 @@ def show_classify():
         if attr_val == "W":
             combo_char_row.config(state="disabled")
 
+        # 검증 로직에서 바뀐 드롭다운 값을 추적할 수 있도록 최종 보관
         classify_rows.append((item["문장"], combo_attr, combo_char_row))
 
 tk.Button(root, text="자동 분류", command=show_classify).pack(pady=5)
 
-# 검증 버튼
+# 검증 버튼 로직
 def validate():
-    character = get_selected_characters()
+    characters = get_selected_characters()  # 선택된 캐릭터 리스트
     scene = text_scene.get("1.0", tk.END).strip()
-    if not character or not scene:
+    
+    if not characters or not scene:
         messagebox.showwarning("경고", "캐릭터와 장면을 입력해주세요")
         return
-    result = validator.validate(character, scene)
-    if result["status"] == "pass":
-        text_result.config(state=tk.NORMAL)
-        text_result.delete("1.0", tk.END)
+
+    text_result.config(state=tk.NORMAL)
+    text_result.delete("1.0", tk.END)
+
+    all_pass = True
+    for character in characters:
+        result = validator.validate(character, scene)
+        
+        if result["status"] == "fail":
+            all_pass = False
+            error_msg = f"❌ 비정합 (캐릭터: {character})\n"
+            error_msg += f"단계: {result['failed_at']}\n"
+            error_msg += f"이유: {result['reason']}\n"
+            
+            text_result.insert(tk.END, error_msg)
+            break  # 하나라도 깨지면 루프 중단
+
+    if all_pass:
         text_result.insert(tk.END, "✅ 정합")
-        text_result.config(state=tk.DISABLED)
-    else:
-        text_result.config(state=tk.NORMAL)
-        text_result.delete("1.0", tk.END)
-        text_result.insert(tk.END, f"❌ 비정합\n실패 항목: {result['failed_at']}\n이유: {result['reason']}")
-        text_result.config(state=tk.DISABLED)
+        
+    text_result.config(state=tk.DISABLED)
 
 tk.Button(root, text="검증", command=validate).pack(pady=5)
 
