@@ -1,13 +1,15 @@
 import json
-import re  # 💡 정규식 임포트를 파일 최상단으로 이동
+import re
 from database import NarrativeDB
 from llm import OllamaLLM
+#from llm import GeminiClient
 
 class Validator:
     # 외부(main.py)에서 이미 만들어진 db 객체를 넘겨받도록 변경
     def __init__(self, db_instance):
         self.db = db_instance
-        self.llm = OllamaLLM()
+        #self.llm =GeminiClient()
+        self.llm =OllamaLLM()
 
     def validate(self, character_name: str, scene: str) -> dict:
         results = {"status": "pass", "reason": "", "failed_at": None}
@@ -62,45 +64,63 @@ class Validator:
 
         return results
 
-    # 💡 들여쓰기를 맞춰서 Validator 클래스의 정식 메서드로 안착시킴
-    def classify(self, scene: str, character_names: list) -> str:  # ⭐️ 리턴 타입을 str로 변경 (main.py 연동용)
-        characters = ", ".join(character_names)
-        
+    # 💡 형이 수정한 main.py에 맞춰서 char_info 딕셔너리 구조를 받도록 수정!
+    def classify(self, scene: str, char_info: dict) -> str:
         # 1. 파이썬이 정규식으로 문장을 완벽하게 분리 (원문 100% 보존)
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', scene) if s.strip()]
         
-        # 2. 라마에게 줄 프롬프트에 문장 번호를 매겨서 제공 (맥락 유지를 위해 통째로 줌)
+        # 2. 라마에게 줄 프롬프트에 문장 번호를 매겨서 제공
         numbered_sentences = ""
         for idx, sent in enumerate(sentences):
             numbered_sentences += f"[{idx}] {sent}\n"
             
-        prompt = f"""너는 소설 문장 분류기야. 제공된 '장면'의 전체 맥락과 대명사(그, 그의 등)가 어떤 캐릭터를 가리키는지 파악하여, 각 문장 번호에 맞는 분류 태그만 JSON 배열로 반환해.
+        # 등장 캐릭터들의 실명 리스트 추출
+        character_names = list(char_info.keys())
+        sample_char = character_names[0] if character_names else "Siegfried"
+        
+        # 💡 라마에게 캐릭터별 실명과 등록된 호칭/알리아스 맵핑 정보를 친절하게 설명해 줌
+        char_meta_desc = ""
+        for name, aliases in char_info.items():
+            alias_str = ", ".join([f"'{a}'" for a in aliases]) if aliases else "없음"
+            char_meta_desc += f"- 본명: {name} (소설 속 다른 호칭/별명: {alias_str})\n"
 
-분류 기준:
-- W: 세계관 설정, 규칙, 지리, 역사, 혹은 캐릭터의 신체적 특징/흉터/외양/소품 설정
-- 캐릭터이름_P: 캐릭터의 성격, 기질, 행동 방식
-- 캐릭터이름_B: 캐릭터의 신념, 가치관
-- 캐릭터이름_K: 캐릭터가 아는 지식, 정보
-- 캐릭터이름_D: 캐릭터의 목표, 욕망
+        # 💡 뇌절 차단: 설명용 메타 텍스트를 정답으로 오해하지 않게 실제 정답 목록을 파이썬이 동적 생성
+        allowed_tags = ["W"]
+        for name in character_names:
+            for attr in ["P", "B", "K", "D"]:
+                allowed_tags.append(f"{name}_{attr}")
+        
+        allowed_tags_str = ", ".join([f'"{t}"' for t in allowed_tags])
 
-등장 캐릭터: {characters}
+        prompt = f"""너는 소설 문장 분류기야. 제공된 '장면'의 전체 맥락과 대명사, 그리고 각 캐릭터의 호칭을 파악해서 각 문장 번호(id)에 맞는 분류 태그를 선택해라. 다른 설명 없이 오직 JSON 배열만 반환해.
 
-[중요] '그', '그의' 같은 대명사는 전체 맥락을 보고 등장 캐릭터 중 누구를 뜻하는지 파악해서 분류해라.
+[등장 캐릭터 및 호칭 정보]
+{char_meta_desc}
+[중요] '그', '그의' 같은 대명사나 위의 다른 호칭(별명)이 나오면 맥락상 어떤 캐릭터를 뜻하는지 본명을 찾아 파악해라.
 
-장면 (번호 규칙을 절대 훼손하지 마):
+[선택 가능한 '분류' 태그 목록]
+{allowed_tags_str}
+
+[분류 매칭 규칙]
+- 특정 캐릭터와 무관한 내용, 세계관 규칙, 지리, 역사, 혹은 캐릭터의 신체적 특징/흉터/외양 설정은 무조건 "W"를 선택한다.
+- 캐릭터의 성격/기질/행동 방식이 나타나면 뒤에 "_P"가 붙은 태그를 선택한다.
+- 캐릭터의 가치관/신념이 나타나면 뒤에 "_B"가 붙은 태그를 선택한다.
+- 캐릭터가 알고 있는 지식/정보가 나타나면 뒤에 "_K"가 붙은 태그를 선택한다.
+- 캐릭터의 목표/욕망이 나타나면 뒤에 "_D"가 붙은 태그를 선택한다.
+
+장면:
 {numbered_sentences}
 
-출력 형식 (오직 이 JSON 형식만 반환하고 다른 말은 절대 하지 마):
+출력 형식 (반드시 이 형태를 지키고, 태그 목록에 없는 값이나 '또는', 'or', 'hoặc' 같은 가이드 문구는 절대 쓰지 마):
 [
-  {{"id": 0, "분류": "W 또는 캐릭터이름_P/B/K/D"}},
-  ...
+  {{"id": 0, "분류": "W"}},
+  {{"id": 1, "분류": "{sample_char}_P"}}
 ]"""
 
         raw_result = self.llm.generate(prompt)
         
         final_data = []
         try:
-            # 안전한 JSON 추출
             clean_raw = raw_result.strip()
             start_idx = clean_raw.find("[")
             end_idx = clean_raw.rfind("]") + 1
@@ -109,18 +129,39 @@ class Validator:
                 
             llm_output = json.loads(clean_raw)
             
-            # 3. ⭐️ 핵심: 라마가 준 '분류'와 파이썬이 보존한 '원본 문장'을 강제로 결합
+            # 3. 라마가 준 분류 태그 예외 보정 및 파이썬 원문 강제 결합
             for item in llm_output:
                 sent_id = item.get("id")
                 if sent_id is not None and sent_id < len(sentences):
+                    raw_class = item.get("분류", "W").strip()
+                    
+                    # 라마가 속성 다 떼먹고 이름만 달랑 뱉었을 때 방어
+                    if raw_class in character_names:
+                        raw_class = f"{raw_class}_P"
+                        
+                    # 대소문자가 틀렸거나 포맷이 미세하게 깨진 경우 자동 교정
+                    for real_name in character_names:
+                        if raw_class.lower().startswith(real_name.lower()):
+                            if "_" in raw_class:
+                                suffix = raw_class.rsplit("_", 1)[1].upper()
+                                if suffix not in ["P", "B", "K", "D"]:
+                                    suffix = "P"
+                            else:
+                                suffix = "P"
+                            raw_class = f"{real_name}_{suffix}"
+                            break
+                    else:
+                        # 리스트에 없는 이상한 헛소리를 채워놨다면 안전하게 세계관("W")으로 세탁
+                        if not raw_class.endswith(("_P", "_B", "_K", "_D")) and raw_class != "W":
+                            raw_class = "W"
+
                     final_data.append({
-                        "문장": sentences[sent_id],  # 형 원문 그대로 주입
-                        "분류": item.get("분류", "W")
+                        "문장": sentences[sent_id],  # 형 원문 그대로 강제 주입
+                        "분류": raw_class
                     })
             
         except Exception as e:
             print(f"[🚨 라마 분류 실패 로그]: {raw_result}")
             final_data = [{"문장": sent, "분류": "W"} for sent in sentences]
 
-        # 4. ⭐️ main.py의 json.loads(raw)가 정상 작동하도록 JSON 문자열로 인코딩해서 리턴
         return json.dumps(final_data, ensure_ascii=False)

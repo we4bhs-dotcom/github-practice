@@ -1,6 +1,7 @@
 import requests
 import json
 
+
 class OllamaLLM:
     def __init__(self, model_name: str = "llama3.2"):
         self.model_name = model_name
@@ -25,3 +26,5 @@ class OllamaLLM:
         except requests.exceptions.RequestException as e:
             print(f"[Ollama Error] 통신 실패: {e}")
             return f"Error: LLM 호출 실패 ({e})"
+    # llm.py - 구글 제미나이(Gemini) 고성능 연동 버전
+
